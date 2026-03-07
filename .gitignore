@@ -46,6 +46,8 @@ uploads/
 *.csv
 *.log
 
+handling_logs.txt
+
 # =========================
 # OS & Editor Files
 # =========================
