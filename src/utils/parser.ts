@@ -16,7 +16,7 @@ export const parseZScalerLogs = (
     let totalCount = 0;
 
     // Chunk size limits how many logs go to Gemini per prompt.
-    // 500 is a safe balance between context window limits and API rate limits.
+    // 2500 is a safe balance between context window limits and API rate limits.
     const CHUNK_SIZE = 2500;
 
     fs.createReadStream(filePath)
@@ -33,7 +33,7 @@ export const parseZScalerLogs = (
       .on("data", (row: string[]) => {
         totalCount++;
 
-        // VALIDATION: Zscaler logs should have roughly 34 columns.
+        // Zscaler logs should have roughly 34 columns.
         // If it has fewer than 10, the line is heavily corrupted or truncated.
         if (row.length < 10) {
           corruptedCount++;
@@ -62,7 +62,7 @@ export const parseZScalerLogs = (
 
         currentChunk.push(entry);
 
-        // Once we hit 500 lines, stringify it and prep a new chunk
+        // Once we hit 2500 lines, stringify it and prep a new chunk
         if (currentChunk.length >= CHUNK_SIZE) {
           chunks.push(JSON.stringify(currentChunk));
           currentChunk = [];

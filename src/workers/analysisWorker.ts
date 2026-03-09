@@ -128,8 +128,7 @@ export const logWorker = new Worker(
         anomalyBatches.push(allAnomalies.slice(i, i + DEEPSEEK_BATCH_SIZE));
       }
 
-      // Use Promise.all to analyze all anomalies at the exact same time
-      // Process all batches concurrently
+      // Use Promise.all to analyze all anomalies at the exact same time, Process all batches concurrently
       const deepSeekPromises = anomalyBatches.map(async (batch, batchIndex) => {
         try {
           console.log(
@@ -138,7 +137,7 @@ export const logWorker = new Worker(
 
           // Inject an ID so the LLM can easily map the result back to us
           const payload = batch.map((anomaly, index) => ({
-            id: anomaly.dbId,
+            id: Number(anomaly.dbId),
             log: anomaly.rawLine,
           }));
 
@@ -175,20 +174,11 @@ export const logWorker = new Worker(
           // Map the results back to the original anomaly using the injected ID and save
           for (const item of forensicResult.results || []) {
             updateAnomalyForensics(item.id, {
+              id: item.id,
               reasoning: item.reasoning,
               confidenceScore: item.confidenceScore,
               severity: item.severity,
             });
-            // const originalAnomaly = batch[item.id];
-            // if (originalAnomaly) {
-            //   saveAnomaly(uploadId, {
-            //     ...originalAnomaly,
-            //     reasoning:
-            //       item.reasoning || "Analysis failed to generate reasoning.",
-            //     confidenceScore: item.confidenceScore || 0.5,
-            //     severity: item.severity || "Medium",
-            //   });
-            // }
           }
         } catch (err) {
           console.error(
@@ -197,13 +187,8 @@ export const logWorker = new Worker(
           );
           // Fallback: If a batch fails, save the anomalies with default values so they aren't lost
           for (const anomaly of batch) {
-            // saveAnomaly(uploadId, {
-            //   ...anomaly,
-            //   reasoning: "DeepSeek API failed to analyze this anomaly.",
-            //   confidenceScore: 0.0,
-            //   severity: "Medium",
-            // });
             updateAnomalyForensics(anomaly.dbId, {
+              id: anomaly.dbId,
               reasoning: "DeepSeek API failed to analyze this anomaly.",
               confidenceScore: 0.0,
               severity: "Medium",

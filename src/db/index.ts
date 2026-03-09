@@ -37,7 +37,7 @@ export const initDb = () => {
     )
   `);
 
-  // NEW: THE DATA LAKE (Stores 100% of the raw ingested logs)
+  // THE DATA LAKE (Stores 100% of the raw ingested logs)
   db.exec(`
     CREATE TABLE IF NOT EXISTS raw_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +87,7 @@ export const initDb = () => {
   `);
 };
 
-// NEW: Auto-seeder for trial accounts
+// Auto-seeder for trial accounts
 export const seedTrialUsers = () => {
   const trialUsers = [
     { email: "admin@soc.local", password: "SecurePassword123!" },

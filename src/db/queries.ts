@@ -1,6 +1,5 @@
 import db from "./index";
-
-// --- EXISTING UPLOAD FUNCTIONS ---
+import { TimelineEvent, AnomalyDetail } from "../schema/index";
 
 export const getUserByEmail = (email: string) => {
   const stmt = db.prepare("SELECT * FROM users WHERE email = ?");
@@ -49,7 +48,7 @@ export const updateUploadStatus = (
   stmt.run(status, summary || null, id);
 };
 
-// --- NEW: HIGH-SPEED BULK INSERTER FOR RAW LOGS ---
+// --- HIGH-SPEED BULK INSERTER FOR RAW LOGS ---
 export const saveRawLogsBatch = (uploadId: string, logs: any[]) => {
   const stmt = db.prepare(`
     INSERT INTO raw_logs (
@@ -95,7 +94,7 @@ export const saveRawLogsBatch = (uploadId: string, logs: any[]) => {
 // --- EXISTING AI EVENT FUNCTIONS ---
 export const saveTimelineEvent = (
   uploadId: string,
-  event: any,
+  event: TimelineEvent,
 ): number | bigint => {
   let parsedDate = null;
   if (event.timestamp) {
@@ -113,7 +112,7 @@ export const saveTimelineEvent = (
     uploadId,
     event.timestamp || "",
     parsedDate,
-    event.category || event.title || "Event",
+    event.category || "Event",
     event.description || "",
     event.isAnomaly ? 1 : 0,
     event.action || null,
@@ -126,7 +125,7 @@ export const saveTimelineEvent = (
 
 export const updateAnomalyForensics = (
   eventId: number | bigint,
-  forensicData: any,
+  forensicData: AnomalyDetail,
 ) => {
   const stmt = db.prepare(
     `UPDATE timeline_events SET reasoning = ?, confidence = ?, severity = ? WHERE id = ?`,
@@ -172,7 +171,7 @@ export const getUploadMetadata = (userId: string, uploadId: string) => {
 };
 
 // ========================================================
-// ENDPOINT 1: AI ANOMALIES (Queries 'timeline_events')
+// AI ANOMALIES (Queries 'timeline_events')
 // ========================================================
 export const getAnomalyEventsPaginated = (
   userId: string,
@@ -232,7 +231,7 @@ export const getAnomalyEventsPaginated = (
 };
 
 // ========================================================
-// ENDPOINT 2: RAW LOGS (Queries the massive 'raw_logs' lake)
+// RAW LOGS (Queries the massive 'raw_logs' lake)
 // ========================================================
 export const getRawLogsPaginated = (
   userId: string,
@@ -293,7 +292,7 @@ export const getRawLogsPaginated = (
 };
 
 // ========================================================
-// ENDPOINT 3: GLOBAL THREAT INTELLIGENCE (Dashboard)
+// GLOBAL THREAT INTELLIGENCE (Dashboard)
 // ========================================================
 export const getGlobalIntelligence = (userId: string, timeRange: string) => {
   const now = new Date();
@@ -307,7 +306,7 @@ export const getGlobalIntelligence = (userId: string, timeRange: string) => {
 
   const startDateStr = startDate.toISOString();
 
-  // FIX: Join with log_uploads to enforce user ownership
+  // Join with log_uploads to enforce user ownership
   const stats = db
     .prepare(
       `
@@ -334,7 +333,6 @@ export const getGlobalIntelligence = (userId: string, timeRange: string) => {
     )
     .all(startDateStr, userId) as any[];
 
-  // (The rest of the JS aggregation logic remains exactly the same...)
   const userCounts: Record<string, { count: number; uploadId: string }> = {};
   const ipCounts: Record<
     string,
@@ -397,4 +395,31 @@ export const getGlobalIntelligence = (userId: string, timeRange: string) => {
     topMaliciousIPs: topIps,
     topTargetedUsers: topUsers,
   };
+};
+
+export const deleteUploadRecord = (
+  userId: string,
+  uploadId: string,
+): string | null => {
+  // 1. Fetch the file path first so we know what to delete off the hard drive
+  const upload = db
+    .prepare(
+      "SELECT file_path, status FROM log_uploads WHERE id = ? AND user_id = ?",
+    )
+    .get(uploadId, userId) as { file_path: string; status: string } | undefined;
+
+  if (!upload) return null; // File doesn't exist or user doesn't own it
+
+  if (upload.status === "pending" || upload.status === "processing") {
+    throw new Error("PROCESSING_ACTIVE");
+  }
+
+  // 2. Delete the record.
+  // SQLite 'ON DELETE CASCADE' automatically wipes the associated raw_logs and timeline_events!
+  db.prepare("DELETE FROM log_uploads WHERE id = ? AND user_id = ?").run(
+    uploadId,
+    userId,
+  );
+
+  return upload.file_path;
 };

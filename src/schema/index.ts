@@ -33,9 +33,13 @@ export type ZScalerLogEntry = z.infer<typeof ZScalerLogSchema>;
 // ==========================================
 export const TimelineEventSchema = z.object({
   timestamp: z.string(),
-  title: z.string(),
+  category: z.string(), // UPDATED: Was 'title'
   description: z.string(),
   isAnomaly: z.boolean(),
+  rawLine: z.string().optional(), // NEW: Extracted for anomalies
+  action: z.string().optional(), // NEW
+  url: z.string().optional(), // NEW
+  clientIp: z.string().optional(), // NEW
 });
 
 export type TimelineEvent = z.infer<typeof TimelineEventSchema>;
@@ -45,14 +49,9 @@ export type TimelineEvent = z.infer<typeof TimelineEventSchema>;
 // The deep forensic reasoning for flagged events
 // ==========================================
 export const AnomalyDetailSchema = z.object({
-  logId: z.string().optional(), // Reference to the parsed log line
-  timestamp: z.string(),
-  action: z.string(),
-  url: z.string(),
-  clientIp: z.string(),
-  rawLine: z.string(), // Critical for SOC pivoting
-  reasoning: z.string(), // The DeepSeek 'Thought' process
-  confidenceScore: z.number().min(0).max(1), // Normalized to 0.0 - 1.0
+  id: z.number(), // UPDATED: Maps to the DB event ID injected in the worker
+  reasoning: z.string(),
+  confidenceScore: z.number().min(0).max(1),
   severity: z.enum(["Critical", "High", "Medium", "Low"]),
 });
 
@@ -63,14 +62,14 @@ export type AnomalyDetail = z.infer<typeof AnomalyDetailSchema>;
 // How we track the file upload and processing state
 // ==========================================
 export const LogUploadJobSchema = z.object({
-  id: z.string(),
+  id: z.string().uuid(),
+  userId: z.string(),
   filename: z.string(),
-  fileHash: z.string(), // Used for deduplication
-  uploadDate: z.date(),
+  fileSize: z.number(),
+  fileHash: z.string(),
   status: z.enum(["pending", "processing", "completed", "failed"]),
-  summary: z.string().optional(), // Gemini's executive summary
-  timeline: z.array(TimelineEventSchema).default([]),
-  anomalies: z.array(AnomalyDetailSchema).default([]),
+  summary: z.string().nullable().optional(),
+  createdAt: z.date().optional(),
 });
 
 export type LogUploadJob = z.infer<typeof LogUploadJobSchema>;

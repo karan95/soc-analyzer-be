@@ -21,6 +21,7 @@ import {
   getAnomalyEventsPaginated,
   getRawLogsPaginated,
   getGlobalIntelligence,
+  deleteUploadRecord,
 } from "./db/queries";
 import { analysisQueue } from "./queue/index";
 import "./workers/analysisWorker";
@@ -61,14 +62,14 @@ server.register(cookie, {
   secret: process.env.COOKIE_SECRET || "cookie-signature-secret",
 });
 
-// Add Rate Limiter (e.g., max 10 uploads per minute per IP for testing)
+// Add Rate Limiter (max 10 uploads per minute per IP for testing)
 server.register(rateLimit, {
   max: 10,
   timeWindow: "1 minute",
 });
 
 server.register(multipart, {
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for take-home
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
 });
 
 // ==========================================
@@ -265,7 +266,7 @@ server.get(
   },
 );
 
-// NEW: Paginated Events Route with fully mapped frontend filters
+// Paginated Events Route with fully mapped frontend filters
 server.get(
   "/api/logs/:id/events",
   { preHandler: [authenticate] },
@@ -335,7 +336,7 @@ server.get(
 );
 
 // ==========================================
-// ENDPOINT 3: GLOBAL INTELLIGENCE DASHBOARD
+// GLOBAL INTELLIGENCE DASHBOARD
 // ==========================================
 server.get(
   "/api/intelligence",
@@ -350,6 +351,45 @@ server.get(
       return reply
         .status(500)
         .send({ error: "Failed to fetch global intelligence" });
+    }
+  },
+);
+
+// Delete Log File Route
+server.delete(
+  "/api/logs/:id",
+  { preHandler: [authenticate] },
+  async (request: any, reply) => {
+    const { id } = request.params as { id: string };
+
+    try {
+      const filePath = deleteUploadRecord(request.user.userId, id);
+
+      if (!filePath) {
+        return reply
+          .status(404)
+          .send({ error: "Log upload not found or unauthorized" });
+      }
+
+      // Delete the physical file from the Railway Volume / local disk
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+
+      return reply.send({
+        message: "File, raw logs, and anomalies deleted successfully",
+      });
+    } catch (error: any) {
+      // Catch the active processing error and return a 409 Conflict
+      if (error.message === "PROCESSING_ACTIVE") {
+        return reply.status(409).send({
+          error:
+            "Cannot delete this log file because it is currently being analyzed by the AI. Please wait for it to finish.",
+        });
+      }
+
+      server.log.error(error);
+      return reply.status(500).send({ error: "Failed to delete log data" });
     }
   },
 );
