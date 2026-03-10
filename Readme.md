@@ -208,7 +208,7 @@ The backend exposes the following REST endpoints. All endpoints (except login) r
     * Accepts a `.txt`, `.csv`, or `.log` file via `multipart/form-data`. 
     * *Note: Requires a `hash` field in the form data.* * Saves to disk and enqueues the BullMQ analysis job.
 * **`GET /api/logs/:id`**
-    * Polls for the processing status and overall metadata of a specific log upload.
+    * Status and Summary of log file
 * **`DELETE /api/logs/:id`**
     * Deletes a log upload, its associated raw logs, anomalies, and the physical file. 
     * **Note:** Returns `409 Conflict` if the file is currently being analyzed.
@@ -271,9 +271,22 @@ Utilities:
 
 ---
 
+# Peformance
+- Log uploads endpoint is strictly limited to 10 requests per user. Additionally, the background worker is configured with concurrency: 2, meaning even if you upload 10 files, the server will only actively process 2 files at the exact same time to prevent exhausting AI API limits. The maximum allowed file size is 10 MB.
+
+---
+
 # Future Improvements
 
-Planned enhancements include:
+Architecture improvements to handle millions of events:
+
+* Use ClickHouse or Elasticsearch to handle high speed queries
+* File ingestion through AWS S3
+* Streaming architecture through Apache Kafka
+* Funnel approch and use lightweight ML models to filter out 99.9% of the noise, process 0.1% suspicious alerts through DeepSeek, move to slef-hosted models
+
+
+Feature enhancements include:
 
 * Real-time SOC dashboards
 * Threat intelligence enrichment

@@ -62,9 +62,8 @@ server.register(cookie, {
   secret: process.env.COOKIE_SECRET || "cookie-signature-secret",
 });
 
-// Add Rate Limiter (max 10 uploads per minute per IP for testing)
 server.register(rateLimit, {
-  max: 10,
+  max: 100,
   timeWindow: "1 minute",
 });
 
@@ -112,38 +111,50 @@ const authenticate = async (request: any, reply: any) => {
   }
 };
 
-server.post("/api/auth/login", async (request, reply) => {
-  const { email, password } = request.body as any;
-  if (!email || !password)
-    return reply.status(400).send({ error: "Email and password required" });
+server.post(
+  "/api/auth/login",
+  {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: "1 minute",
+      },
+    },
+  },
+  async (request, reply) => {
+    const { email, password } = request.body as any;
+    if (!email || !password)
+      return reply.status(400).send({ error: "Email and password required" });
 
-  const user = getUserByEmail(email);
-  if (!user) return reply.status(401).send({ error: "Invalid credentials" });
+    const user = getUserByEmail(email);
+    if (!user) return reply.status(401).send({ error: "Invalid credentials" });
 
-  const isValid = await bcrypt.compare(password, user.password_hash);
-  if (!isValid) return reply.status(401).send({ error: "Invalid credentials" });
+    const isValid = await bcrypt.compare(password, user.password_hash);
+    if (!isValid)
+      return reply.status(401).send({ error: "Invalid credentials" });
 
-  // 8 Hours absolute maximum session time from login
-  const absoluteExp = Date.now() + 8 * 60 * 60 * 1000;
-  const token = server.jwt.sign({
-    userId: user.id,
-    email: user.email,
-    absoluteExp,
-  });
+    // 8 Hours absolute maximum session time from login
+    const absoluteExp = Date.now() + 8 * 60 * 60 * 1000;
+    const token = server.jwt.sign({
+      userId: user.id,
+      email: user.email,
+      absoluteExp,
+    });
 
-  reply.setCookie("token", token, {
-    path: "/",
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? "none" : "lax",
-    maxAge: 10 * 60, // Starts the 10-minute inactivity timer
-  });
+    reply.setCookie("token", token, {
+      path: "/",
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? "none" : "lax",
+      maxAge: 10 * 60, // Starts the 10-minute inactivity timer
+    });
 
-  return reply.send({
-    message: "Login successful",
-    user: { id: user.id, email: user.email },
-  });
-});
+    return reply.send({
+      message: "Login successful",
+      user: { id: user.id, email: user.email },
+    });
+  },
+);
 
 server.post("/api/auth/logout", async (request, reply) => {
   reply.clearCookie("token", { path: "/" });
@@ -194,7 +205,15 @@ server.get(
 // Upload Route
 server.post(
   "/api/logs/upload",
-  { preHandler: [authenticate] },
+  {
+    preHandler: [authenticate],
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: "1 minute",
+      },
+    },
+  },
   async (request: any, reply) => {
     const data = await request.file();
     if (!data) return reply.status(400).send({ error: "No file uploaded" });
@@ -252,7 +271,7 @@ server.post(
   },
 );
 
-// Status & Results Polling Route
+// Log Summary
 server.get(
   "/api/logs/:id",
   { preHandler: [authenticate] },

@@ -365,6 +365,7 @@ export const getGlobalIntelligence = (userId: string, timeRange: string) => {
     }
   });
 
+  // top 5 users with the most anomalies
   const topUsers = Object.entries(userCounts)
     .map(([user, data]) => ({
       user,
@@ -374,6 +375,8 @@ export const getGlobalIntelligence = (userId: string, timeRange: string) => {
     }))
     .sort((a, b) => b.incidents - a.incidents)
     .slice(0, 5);
+
+  // top 5 IP addresses with the most anomalies
   const topIps = Object.entries(ipCounts)
     .map(([ip, data]) => ({
       ip,
