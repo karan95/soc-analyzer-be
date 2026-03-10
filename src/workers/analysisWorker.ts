@@ -3,6 +3,7 @@ import { Worker } from "bullmq";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 import Redis from "ioredis";
+import path from "path";
 import { parseZScalerLogs } from "../utils/parser";
 import {
   updateUploadStatus,
@@ -10,6 +11,10 @@ import {
   updateAnomalyForensics,
   saveRawLogsBatch,
 } from "../db/queries";
+
+const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads")
+  : path.resolve(__dirname, "../../uploads");
 
 // Initialize AI Clients
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
@@ -52,8 +57,12 @@ Return ONLY valid JSON.
 export const logWorker = new Worker(
   "log-analysis",
   async (job) => {
-    const { uploadId, filePath } = job.data;
-    console.log(`[Worker] Started processing upload: ${uploadId}`);
+    const { uploadId, filename } = job.data;
+    const filePath = path.join(uploadsDir, `${uploadId}-${filename}`);
+
+    console.log(
+      `[Worker] Started processing upload: ${uploadId} at (${filePath})`,
+    );
 
     try {
       updateUploadStatus(uploadId, "processing");

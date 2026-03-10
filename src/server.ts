@@ -258,7 +258,10 @@ server.post(
         filePath,
       );
 
-      await analysisQueue.add("process-log", { uploadId, filePath });
+      await analysisQueue.add("process-log", {
+        uploadId,
+        filename: data.filename,
+      });
       return reply.send({ uploadId, status: "pending", duplicate: false });
     } catch (err: any) {
       console.error("UPLOAD ERROR:", err.message);
