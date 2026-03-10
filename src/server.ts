@@ -11,6 +11,7 @@ import crypto from "crypto";
 import { pipeline } from "stream/promises";
 import "dotenv/config";
 import { initDb, seedTrialUsers } from "./db/index";
+import { logWorker } from "./workers/analysisWorker";
 
 import {
   getUserByEmail,
@@ -207,12 +208,7 @@ server.post(
   "/api/logs/upload",
   {
     preHandler: [authenticate],
-    config: {
-      rateLimit: {
-        max: 10,
-        timeWindow: "1 minute",
-      },
-    },
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
   },
   async (request: any, reply) => {
     const data = await request.file();
@@ -220,17 +216,18 @@ server.post(
 
     const allowedExtensions = [".txt", ".csv", ".log"];
     const ext = path.extname(data.filename).toLowerCase();
-    if (!allowedExtensions.includes(ext))
+    if (!allowedExtensions.includes(ext)) {
       return reply.status(415).send({ error: `Unsupported file type: ${ext}` });
+    }
 
     const fileHash = (data.fields.hash as any)?.value;
     if (!fileHash)
       return reply.status(400).send({ error: "File hash is required" });
 
-    // Pass userId
+    // Instant Duplicate Check
     const existing = getUploadByHash(request.user.userId, fileHash);
     if (existing) {
-      await data.toBuffer();
+      await data.toBuffer(); // Safely clear stream memory
       return reply.send({
         uploadId: existing.id,
         status: existing.status,
@@ -242,34 +239,39 @@ server.post(
     const filePath = path.join(uploadsDir, `${uploadId}-${data.filename}`);
 
     try {
+      // AWAIT THE STREAM! Fastify requires this before reply.send()
       await pipeline(data.file, fs.createWriteStream(filePath));
-
-      // 2. Capture the file size from the disk
       const stats = fs.statSync(filePath);
-      const fileSize = stats.size;
 
-      // Pass userId during creation!
+      // Create DB Record now that it's safely on disk
       createUploadRecord(
         request.user.userId,
         uploadId,
         data.filename,
-        fileSize,
+        stats.size,
         fileHash,
         filePath,
       );
 
-      await analysisQueue.add("process-log", {
-        uploadId,
-        filename: data.filename,
-      });
+      // Add to Queue
+      await analysisQueue.add(
+        "process-log",
+        { uploadId, filename: data.filename },
+        { removeOnComplete: true, attempts: 3 },
+      );
+
+      console.log(
+        `[Backend] File ${uploadId} fully saved and queued to Redis.`,
+      );
+
+      // Send Success Reply
       return reply.send({ uploadId, status: "pending", duplicate: false });
     } catch (err: any) {
       console.error("UPLOAD ERROR:", err.message);
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-
       return reply
         .status(500)
-        .send({ error: "Internal server error during upload" });
+        .send({ error: "Storage engine error during upload" });
     }
   },
 );
@@ -431,3 +433,21 @@ const start = async () => {
 };
 
 start();
+
+const shutdown = async () => {
+  console.log("shutting down Redis connections...");
+  try {
+    // Close BullMQ connections safely
+    await analysisQueue.close();
+    await logWorker.close();
+    console.log("Redis connections closed. Exiting process.");
+    process.exit(0);
+  } catch (err) {
+    console.error("Error during shutdown:", err);
+    process.exit(1);
+  }
+};
+
+// Listen for termination signals from ts-node-dev or the OS
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

@@ -16,8 +16,8 @@ export const parseZScalerLogs = (
     let totalCount = 0;
 
     // Chunk size limits how many logs go to Gemini per prompt.
-    // 2500 is a safe balance between context window limits and API rate limits.
-    const CHUNK_SIZE = 2500;
+    // 100 is a safe balance between context window limits and API rate limits.
+    const CHUNK_SIZE = 100;
 
     fs.createReadStream(filePath)
       .pipe(
@@ -62,7 +62,7 @@ export const parseZScalerLogs = (
 
         currentChunk.push(entry);
 
-        // Once we hit 2500 lines, stringify it and prep a new chunk
+        // Once we hit 100 lines, stringify it and prep a new chunk
         if (currentChunk.length >= CHUNK_SIZE) {
           chunks.push(JSON.stringify(currentChunk));
           currentChunk = [];

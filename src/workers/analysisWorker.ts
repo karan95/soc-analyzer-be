@@ -12,6 +12,42 @@ import {
   saveRawLogsBatch,
 } from "../db/queries";
 
+const redisWorkerOptions: any = {
+  maxRetriesPerRequest: null,
+  enableOfflineQueue: false,
+  keepAlive: 10000,
+  pingInterval: 10000,
+  family: 0,
+  retryStrategy(times: number) {
+    return Math.min(times * 50, 2000); // Auto-reconnect backoff
+  },
+  reconnectOnError(err: Error) {
+    return true;
+  },
+};
+
+// Initialize the connection BEFORE passing it to the Worker
+const workerConnection = process.env.REDIS_URL
+  ? new Redis(process.env.REDIS_URL, {
+      ...redisWorkerOptions,
+      tls: process.env.REDIS_URL.startsWith("rediss://")
+        ? { rejectUnauthorized: false }
+        : undefined,
+    })
+  : new Redis({
+      host: process.env.REDIS_HOST || "127.0.0.1",
+      port: parseInt(process.env.REDIS_PORT || "6379", 10),
+      ...redisWorkerOptions,
+    });
+
+// Catch the micro-drops so Node doesn't print giant red stack traces
+workerConnection.on("error", (err) => {
+  console.warn(
+    "[Redis Worker] Connection warning (auto-reconnecting):",
+    err.message,
+  );
+});
+
 const uploadsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads")
   : path.resolve(__dirname, "../../uploads");
@@ -55,7 +91,7 @@ Return ONLY valid JSON.
 `;
 
 export const logWorker = new Worker(
-  "log-analysis",
+  "soc-logs-queue",
   async (job) => {
     const { uploadId, filename } = job.data;
     const filePath = path.join(uploadsDir, `${uploadId}-${filename}`);
@@ -93,35 +129,42 @@ export const logWorker = new Worker(
           `[Worker] Sending chunk ${i + 1}/${chunks.length} to Gemini...`,
         );
 
-        const triageResult = await model.generateContent({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: geminiPrompt + "\n\nLogs:\n" + chunks[i] }],
-            },
-          ],
-          generationConfig: { responseMimeType: "application/json" },
-        });
+        try {
+          const triageResult = await model.generateContent({
+            contents: [
+              {
+                role: "user",
+                parts: [{ text: geminiPrompt + "\n\nLogs:\n" + chunks[i] }],
+              },
+            ],
+            generationConfig: { responseMimeType: "application/json" },
+          });
 
-        const rawText = triageResult.response.text();
-        const cleanText = rawText
-          .replace(/```json/g, "")
-          .replace(/```/g, "")
-          .trim();
-        const triageData = JSON.parse(cleanText);
+          const rawText = triageResult.response.text();
+          const cleanText = rawText
+            .replace(/```json/g, "")
+            .replace(/```/g, "")
+            .trim();
+          const triageData = JSON.parse(cleanText);
 
-        // Aggregate summaries and save timeline events
-        finalSummary += triageData.summary + " ";
+          // Aggregate summaries and save timeline events
+          finalSummary += triageData.summary + " ";
 
-        // ONLY save actual anomalies to the timeline_events table
-        for (const event of triageData.timeline || []) {
-          if (event.isAnomaly) {
-            const insertedId = saveTimelineEvent(uploadId, event);
+          // ONLY save actual anomalies to the timeline_events table
+          for (const event of triageData.timeline || []) {
+            if (event.isAnomaly) {
+              const insertedId = saveTimelineEvent(uploadId, event);
 
-            if (event.rawLine) {
-              allAnomalies.push({ dbId: insertedId, rawLine: event.rawLine });
+              if (event.rawLine) {
+                allAnomalies.push({ dbId: insertedId, rawLine: event.rawLine });
+              }
             }
           }
+        } catch (geminiError) {
+          console.error(
+            `[Worker] Failed to parse Gemini response for chunk ${i + 1}. Skipping chunk.`,
+            geminiError,
+          );
         }
       }
 
@@ -137,15 +180,13 @@ export const logWorker = new Worker(
         anomalyBatches.push(allAnomalies.slice(i, i + DEEPSEEK_BATCH_SIZE));
       }
 
-      // Use Promise.all to analyze all anomalies at the exact same time, Process all batches concurrently
-      const deepSeekPromises = anomalyBatches.map(async (batch, batchIndex) => {
+      for (const [batchIndex, batch] of anomalyBatches.entries()) {
         try {
           console.log(
             `[Worker] DeepSeek analyzing batch ${batchIndex + 1}/${anomalyBatches.length}...`,
           );
 
-          // Inject an ID so the LLM can easily map the result back to us
-          const payload = batch.map((anomaly, index) => ({
+          const payload = batch.map((anomaly) => ({
             id: Number(anomaly.dbId),
             log: anomaly.rawLine,
           }));
@@ -156,7 +197,7 @@ export const logWorker = new Worker(
               {
                 role: "system",
                 content: `You are an elite cybersecurity forensics AI. Analyze the provided JSON array of ZScaler proxy logs.
-                Return a JSON object with a single key "results" containing an array of your analyses. 
+                Return a JSON object with a single key "results" containing an array of your analyses.
                 
                 CRITICAL INSTRUCTIONS:
                 - "id": The exact integer ID provided in the input.
@@ -166,18 +207,19 @@ export const logWorker = new Worker(
               },
               { role: "user", content: JSON.stringify(payload) },
             ],
-            response_format: { type: "json_object" },
           });
 
-          // DeepSeek-R1 separates its <think> blocks from the final content when using the API
-          const responseText =
+          const rawResponse =
             forensicResponse.choices[0].message.content || '{"results": []}';
 
-          // Safety catch: Sometimes reasoning models append markdown blocks to JSON
-          const cleanJson = responseText
-            .replace(/```json/g, "")
-            .replace(/```/g, "")
-            .trim();
+          // Strip <think> tags and extract ONLY the JSON brackets
+          const withoutThinkTags = rawResponse.replace(
+            /<think>[\s\S]*?<\/think>/g,
+            "",
+          );
+          const jsonMatch = withoutThinkTags.match(/\{[\s\S]*\}/);
+          const cleanJson = jsonMatch ? jsonMatch[0] : '{"results": []}';
+
           const forensicResult = JSON.parse(cleanJson);
 
           // Map the results back to the original anomaly using the injected ID and save
@@ -189,24 +231,23 @@ export const logWorker = new Worker(
               severity: item.severity,
             });
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error(
             `[Worker] DeepSeek failed on batch ${batchIndex + 1}:`,
-            err,
+            err.message,
           );
           // Fallback: If a batch fails, save the anomalies with default values so they aren't lost
           for (const anomaly of batch) {
             updateAnomalyForensics(anomaly.dbId, {
               id: anomaly.dbId,
-              reasoning: "DeepSeek API failed to analyze this anomaly.",
+              reasoning:
+                "DeepSeek API failed to analyze this anomaly due to rate limits or formatting.",
               confidenceScore: 0.0,
               severity: "Medium",
             });
           }
         }
-      });
-
-      await Promise.all(deepSeekPromises);
+      }
 
       // 4. Complete Job with Metadata
       const completionMessage = `${finalSummary.trim()} (Processed ${totalCount} logs. Skipped ${corruptedCount} corrupted lines).`;
@@ -219,18 +260,14 @@ export const logWorker = new Worker(
     }
   },
   {
-    connection: process.env.REDIS_URL
-      ? (new Redis(process.env.REDIS_URL, {
-          maxRetriesPerRequest: null,
-          tls: process.env.REDIS_URL.startsWith("rediss://")
-            ? { rejectUnauthorized: false }
-            : undefined,
-        }) as any)
-      : {
-          host: process.env.REDIS_HOST || "127.0.0.1",
-          port: parseInt(process.env.REDIS_PORT || "6379", 10),
-          keepAlive: 10000,
-        },
-    concurrency: 2, // Dropped to 2 so multiple concurrent jobs don't instantly exceed OpenAI rate limits
+    connection: workerConnection as any,
+    concurrency: 2,
   },
 );
+
+logWorker.on("error", (err) => {
+  console.warn(
+    "[BullMQ Worker] Background connection drop caught & auto-healing:",
+    err.message,
+  );
+});
