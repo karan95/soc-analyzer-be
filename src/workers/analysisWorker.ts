@@ -229,6 +229,7 @@ export const logWorker = new Worker(
       : {
           host: process.env.REDIS_HOST || "127.0.0.1",
           port: parseInt(process.env.REDIS_PORT || "6379", 10),
+          keepAlive: 10000,
         },
     concurrency: 2, // Dropped to 2 so multiple concurrent jobs don't instantly exceed OpenAI rate limits
   },

@@ -198,10 +198,14 @@ export const getAnomalyEventsPaginated = (
     query += " AND category = ?";
     params.push(category);
   }
+
   if (clientIp) {
-    query += " AND client_ip LIKE ?";
-    params.push(`%${clientIp}%`);
+    query +=
+      " AND (client_ip LIKE ? OR url LIKE ? OR description LIKE ? OR raw_line LIKE ?)";
+    const pattern = `%${clientIp}%`;
+    params.push(pattern, pattern, pattern, pattern);
   }
+
   if (severity && severity !== "all") {
     query += " AND LOWER(severity) = ?";
     params.push(severity.toLowerCase());
@@ -253,10 +257,28 @@ export const getRawLogsPaginated = (
   let whereClause = " WHERE upload_id = ?";
   if (searchQuery) {
     whereClause +=
-      " AND (url LIKE ? OR client_ip LIKE ? OR user LIKE ? OR threat_name LIKE ?)";
+      " AND (url LIKE ? OR client_ip LIKE ? OR server_ip LIKE ? OR user LIKE ? OR threat_name LIKE ? OR app LIKE ? OR category LIKE ? OR user_agent LIKE ?)";
     const pattern = `%${searchQuery}%`;
-    params.push(pattern, pattern, pattern, pattern);
-    countParams.push(pattern, pattern, pattern, pattern);
+    params.push(
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+    );
+    countParams.push(
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+    );
   }
 
   const countRes = db
